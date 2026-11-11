@@ -1,0 +1,1345 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>For Britt</title>
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💌</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  /* Always night-black on purpose, so light and dark use the same tokens. */
+  :root {
+    --bg: #000000; --ink: #f6f1f3; --muted: #8d90a3; --love: #ff2d3f;
+    color-scheme: dark;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #000000; --ink: #f6f1f3; --muted: #8d90a3; } }
+  :root[data-theme="dark"] { --bg: #000000; --ink: #f6f1f3; --muted: #8d90a3; }
+  html { scroll-padding-top: env(safe-area-inset-top, 0px); }
+  html, body { height: 100%; margin: 0; background: var(--bg); overflow: hidden; overscroll-behavior: none; }
+  body { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  .hint {
+    position: fixed; left: 0; right: 0; margin: 0; padding: 0 24px; text-align: center;
+    font: 400 14px/1.5 "Space Mono", ui-monospace, Menlo, monospace; color: var(--muted);
+    opacity: 0; transition: opacity .8s ease; pointer-events: none;
+  }
+  .hint.show { opacity: 1; }
+  .hint .cursor { animation: blink 1.1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .reread {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    top: 0; white-space: nowrap;
+    font: 400 14px "Space Mono", ui-monospace, Menlo, monospace; color: var(--ink);
+    background: rgba(255, 255, 255, 0.06); border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 999px; padding: 10px 22px; cursor: pointer;
+    opacity: 0; pointer-events: none; transition: opacity 1.2s ease;
+  }
+  .reread.show { opacity: 1; pointer-events: auto; }
+  .reread:focus-visible { outline: 2px solid var(--love); outline-offset: 3px; }
+  .letter-view {
+    position: fixed; inset: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y;
+    background: rgba(0, 0, 0, 0.84);
+    padding: calc(56px + env(safe-area-inset-top, 0px)) 28px calc(72px + env(safe-area-inset-bottom, 0px));
+    opacity: 0; pointer-events: none; transition: opacity .5s ease;
+  }
+  .letter-view.show { opacity: 1; pointer-events: auto; }
+  .letter-inner { max-width: 34ch; margin: 0 auto; font: 400 15px/1.7 "Space Mono", ui-monospace, Menlo, monospace; color: var(--ink); }
+  .letter-inner p { margin: 0 0 1.1em; }
+  .letter-inner .sig { text-align: right; white-space: pre-line; }
+  .letter-close { margin: 28px 0 0; text-align: center; font: 400 12px "Space Mono", ui-monospace, Menlo, monospace; color: var(--muted); }
+</style>
+</head>
+<body>
+<canvas id="stage" role="img" aria-label="A birthday surprise for Britt: an envelope opens, her letter flows into a heart of I love you, which becomes a birthday cake whose candles she blows out"></canvas>
+<p class="hint" id="hint">tap the heart to open<span class="cursor">_</span></p>
+<button id="reread" class="reread" type="button">read your letter again</button>
+<div id="letterView" class="letter-view" role="dialog" aria-label="Your letter">
+  <div class="letter-inner" id="letterInner"></div>
+  <p class="letter-close">tap anywhere to close</p>
+</div>
+
+<script>
+'use strict';
+/* =====================================================================
+   BIRTHDAY SHOW, envelope → letter → rivers → heart → cake → smoke
+   ---------------------------------------------------------------------
+   Two drawing styles:
+   - DENSE ASCII (envelope, cake, flames, smoke): paint ordinary shapes
+     on a tiny hidden canvas (one pixel per character cell), then turn
+     each cell into a character. Brighter = denser character, edges get
+     / \ | -, and the cell's color tints it. makeAscii() builds one of
+     these renderers; the envelope and the cake use different cell sizes.
+   - WORD PARTICLES (letter, rivers, heart): each word is an object whose
+     position we work out from the clock every frame.
+   ===================================================================== */
+
+const CONFIG = {
+  letter: 'Dear Britt,\n\nHappy 29th birthday! I love you so so much and I am so proud of you and everything you have done. Last year we had just gotten a couch, swag was running rampant and the thought of shopping at Costco was disgusting (it still is hahaha). Now we are settled and planning all of the fun adventures together. I’m so excited to spend this year and every year following at your side supporting you and giving you the princess treatment you deserve! You mean the world to me, happy birthday baby!',
+  signature: 'Love,\nLogan',      // laid out flush right under the letter
+  header: 'Happy Birthday Britt',       // above the cake
+  giftLine: 'Here is your gift',        // top of the last screen
+  finalLine: 'Happy Birthday Baby',     // above the button on the last screen
+  wordGap: 0.06,        // seconds between words leaving the envelope
+  flight: 1.8,          // seconds each word takes to reach its spot in the letter
+  readPace: 0.28,       // seconds per word as she reads (about 215 words a minute)
+  leaveDelay: 2.4,      // a word leaves this long after turning red (about a line behind her)
+  riverSpeed: [150, 215],
+  heartHold: 5.2,       // seconds the finished heart beats before becoming the cake
+  ink: [246, 238, 240],
+  red: [255, 45, 63],
+};
+const COLORS = {
+  bodyLight: '#f7b890', bodyDark: '#d4845c', flap: '#f9c29c', inside: '#6e3a28', flapInside: '#b7714f',
+  crease: '#4d2618', seal: '#ff4f86', sealBeat: '#ff9cbd', label: '#fff1f5', labelDim: '#b0664a',
+};
+const MONO = '"Space Mono", ui-monospace, Menlo, monospace';
+const BANNER_DATA = {"banners": {"big": [" ______ ____  _____    ____  _____  _____ _______ _______ ", "|  ____/ __ \\|  __ \\  |  _ \\|  __ \\|_   _|__   __|__   __|", "| |__ | |  | | |__) | | |_) | |__) | | |    | |     | |   ", "|  __|| |  | |  _  /  |  _ <|  _  /  | |    | |     | |   ", "| |   | |__| | | \\ \\  | |_) | | \\ \\ _| |_   | |     | |   ", "|_|    \\____/|_|  \\_\\ |____/|_|  \\_\\_____|  |_|     |_|   "], "standard": [" _____ ___  ____    ____  ____  ___ _____ _____ ", "|  ___/ _ \\|  _ \\  | __ )|  _ \\|_ _|_   _|_   _|", "| |_ | | | | |_) | |  _ \\| |_) || |  | |   | |  ", "|  _|| |_| |  _ <  | |_) |  _ < | |  | |   | |  ", "|_|   \\___/|_| \\_\\ |____/|_| \\_\\___| |_|   |_|  "], "small": [" ___ ___  ___   ___ ___ ___ _____ _____ ", "| __/ _ \\| _ \\ | _ ) _ \\_ _|_   _|_   _|", "| _| (_) |   / | _ \\   /| |  | |   | |  ", "|_| \\___/|_|_\\ |___/_|_\\___| |_|   |_|  "]}, "chars": "()/<\\_|"};           // "FOR BRITT" in FIGlet lettering (made for character grids)
+const CAKE_SRC = 'data:image/png;base64,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';
+const CAKE_CANDLES = [{ x: 0.3721, top: 0.2062 }, { x: 0.4996, top: 0.2 }, { x: 0.6275, top: 0.2062 }]; // in image fractions
+
+const PHRASES = [
+  'Te amo','Te quiero','Je t’aime','Ich liebe dich','Ti amo','Eu te amo','Ik hou van je',
+  'Jag älskar dig','Jeg elsker deg','Jeg elsker dig','Minä rakastan sinua','Ég elska þig',
+  'Kocham cię','Miluji tě','Ľúbim ťa','Szeretlek','Te iubesc','Я тебя люблю','Я тебе кохаю',
+  'Обичам те','Volim te','Ljubim te','Σ’ αγαπώ','Seni seviyorum','أحبك','אני אוהב אותך',
+  'دوستت دارم','मैं तुमसे प्यार करता हूँ','আমি তোমাকে ভালোবাসি','میں تم سے محبت کرتا ہوں',
+  'நான் உன்னை காதலிக்கிறேன்','నేను నిన్ను ప్రేమిస్తున్నాను','ਮੈਂ ਤੈਨੂੰ ਪਿਆਰ ਕਰਦਾ ਹਾਂ',
+  'मी तुझ्यावर प्रेम करतो','હું તને પ્રેમ કરું છું','म तिमीलाई माया गर्छु','我爱你','我愛你',
+  '愛してる','사랑해','Anh yêu em','ผมรักคุณ','Aku cinta kamu','Saya cintakan awak','Mahal kita',
+  'Nakupenda','Ngiyakuthanda','Ndiyakuthanda','Ek het jou lief','እወድሻለሁ','Mo nifẹ rẹ',
+  'Ina son ki','A hụrụ m gị n’anya','Waan ku jeclahay','Tá grá agam duit','Rwy’n dy garu di',
+  'Tha gaol agam ort','Maite zaitut','T’estimo','Quérote','Mi amas vin','Aloha wau iā ʻoe',
+  'Aroha ahau ki a koe','Ou te alofa ia te oe','Ma armastan sind','Es tevi mīlu','Aš tave myliu',
+  'Të dua','Те сакам','Ես քեզ սիրում եմ','მიყვარხარ','Mən səni sevirəm','Мен сені жақсы көремін',
+  'Men seni sevaman','Би чамд хайртай','ខ្ញុំស្រលាញ់អ្នក','ຂ້ອຍຮັກເຈົ້າ','ချစ်တယ်','මම ඔයාට ආදරෙයි',
+  'ഞാൻ നിന്നെ സ്നേഹിക്കുന്നു','ನಾನು ನಿನ್ನನ್ನು ಪ್ರೀತಿಸುತ್ತೇನೆ','Ech hunn dech gär','Inħobbok',
+  'Eg elski teg','Mwen renmen ou','Ez te hez dikim','Я цябе кахаю','Kuv hlub koj','Gihigugma tika',
+  'Munakuyki','Rohayhu','איך האב דיך ליב','Tiako ianao','Ndimakukonda','ʻOku ou ʻofa atu',
+  'Мин сине яратам','Мен сени сүйөм','Ман туро дӯст медорам','Ndagukunda','Me dɔ wo','Nalingi yo',
+  'Ndinokuda','Ik hâld fan dy','Ti tengu caru',
+];
+
+// ---------- helpers ----------
+const clamp01 = t => (t < 0 ? 0 : t > 1 ? 1 : t);
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = t => t * t * (3 - 2 * t);
+const inOut = t => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const outCubic = t => 1 - Math.pow(1 - t, 3);
+const hash2 = (x, y) => { const s = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return s - Math.floor(s); };
+const rand = (a, b) => a + Math.random() * (b - a);
+const mix = (c1, c2, t) => c1.map((v, k) => lerp(v, c2[k], t));
+const bez = (p0, p1, p2, p3, u) => { const v = 1 - u; return v * v * v * p0 + 3 * v * v * u * p1 + 3 * v * u * u * p2 + u * u * u * p3; };
+const bezD = (p0, p1, p2, p3, u) => { const v = 1 - u; return 3 * v * v * (p1 - p0) + 6 * v * u * (p2 - p1) + 3 * u * u * (p3 - p2); };
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+const GLYPHS = '01<>/\\|*+=#%&$?!~^';
+function scramble(s, amount, seed) {
+  if (amount <= 0) return s;
+  let out = '';
+  Array.from(s).forEach((c, i) => {
+    if (c === ' ') { out += ' '; return; }
+    out += hash2(seed, i * 7.13) < amount ? GLYPHS[Math.floor(hash2(seed * 1.7, i * 3.1) * GLYPHS.length)] : c;
+  });
+  return out;
+}
+
+// ---------- canvas ----------
+const canvas = document.getElementById('stage');
+const ctx = canvas.getContext('2d');
+const hint = document.getElementById('hint');
+const rereadBtn = document.getElementById('reread');
+const letterView = document.getElementById('letterView');
+const letterInner = document.getElementById('letterInner');
+let W = 0, H = 0, DPR = 1;                   // W, H: the size the show was laid out for
+let view = { k: 1, ox: 0, oy: 0 };          // how that layout fits the current screen
+const applyView = () => ctx.setTransform(DPR * view.k, 0, 0, DPR * view.k, DPR * view.ox, DPR * view.oy);
+
+// =====================================================================
+// 1. ASCII renderer factory
+// =====================================================================
+const RAMP = ' .,:;-~=+*xoX#%&$@';
+const EDGES = ['-', '\\', '|', '/'];
+
+function makeAscii(fontPx, extraChars = '') {
+  const A = { fontPx };
+  const font = `700 ${fontPx * DPR}px ${MONO}`;
+  const m = document.createElement('canvas').getContext('2d'); m.font = font;
+  A.cwD = Math.max(2, Math.round(m.measureText('M').width)); A.chD = Math.round(fontPx * 1.12 * DPR);
+  A.cw = A.cwD / DPR; A.ch = A.chD / DPR;
+  A.cols = Math.ceil(W / A.cw); A.rows = Math.ceil(H / A.ch);
+  A.src = document.createElement('canvas'); A.src.width = A.cols; A.src.height = A.rows;
+  A.sctx = A.src.getContext('2d', { willReadFrequently: true });
+  A.glyphs = document.createElement('canvas'); A.glyphs.width = A.cols * A.cwD; A.glyphs.height = A.rows * A.chD;
+  A.gctx = A.glyphs.getContext('2d');
+  const chars = Array.from(RAMP + EDGES.join(''));
+  for (const c of extraChars) if (!chars.includes(c)) chars.push(c);
+  A.index = new Map();
+  chars.forEach((c, i) => { if (!A.index.has(c)) A.index.set(c, i); });
+  A.atlas = document.createElement('canvas'); A.atlas.width = chars.length * A.cwD; A.atlas.height = A.chD;
+  const a = A.atlas.getContext('2d');
+  a.font = font; a.fillStyle = '#fff'; a.textAlign = 'center'; a.textBaseline = 'middle';
+  chars.forEach((c, i) => a.fillText(c, i * A.cwD + A.cwD / 2, A.chD / 2));
+  A.lum = new Float32Array(A.cols * A.rows);
+
+  // paint(g) draws the scene in screen pixels. opts: reveal (0..1 random build-in),
+  // front {y, band} (only cells below y show), override(c, r) → a forced character.
+  A.render = (paint, opts = {}) => {
+    const { cols, rows, cw, ch, cwD, chD, lum, sctx, gctx } = A;
+    sctx.setTransform(1, 0, 0, 1, 0, 0); sctx.clearRect(0, 0, cols, rows);
+    sctx.setTransform(1 / cw, 0, 0, 1 / ch, 0, 0);
+    paint(sctx);
+    const d = sctx.getImageData(0, 0, cols, rows).data;
+    for (let i = 0, n = cols * rows; i < n; i++) {
+      const k = i * 4, al = d[k + 3] / 255;
+      lum[i] = al < 0.08 ? -1 : ((0.3 * d[k] + 0.59 * d[k + 1] + 0.11 * d[k + 2]) / 255) * al;
+    }
+    gctx.globalCompositeOperation = 'source-over';
+    gctx.clearRect(0, 0, A.glyphs.width, A.glyphs.height);
+    const rampMax = RAMP.length - 1, edgeBase = RAMP.length;
+    const reveal = opts.reveal ?? 1, front = opts.front, override = opts.override;
+    for (let r = 0; r < rows; r++) {
+      const ry = (r + 0.5) * ch;
+      for (let c = 0; c < cols; c++) {
+        const i = r * cols + c, L = lum[i];
+        if (L < 0.03) continue;
+        if (reveal < 1 && hash2(c, r) > reveal) continue;
+        if (front && ry < front.y + (hash2(c * 3, r * 5) - 0.5) * front.band) continue;
+        let idx;
+        const forced = override ? override(c, r) : undefined;
+        if (forced !== undefined) {
+          if (forced === ' ') continue;
+          idx = A.index.get(forced);
+        } else {
+          const lf = c > 0 ? Math.max(0, lum[i - 1]) : 0, rt = c < cols - 1 ? Math.max(0, lum[i + 1]) : 0;
+          const up = r > 0 ? Math.max(0, lum[i - cols]) : 0, dn = r < rows - 1 ? Math.max(0, lum[i + cols]) : 0;
+          const gx = rt - lf, gy = dn - up;
+          if (Math.hypot(gx, gy) > 0.32) {
+            let a = Math.atan2(gx / cw, -gy / ch);
+            if (a < 0) a += Math.PI;
+            idx = edgeBase + (Math.floor(((a + Math.PI / 8) % Math.PI) / (Math.PI / 4)) % 4);
+          } else {
+            const v = Math.pow(L, 0.65) + (hash2(c * 7, r * 13) - 0.5) * 0.14;
+            idx = Math.max(1, Math.min(rampMax, Math.round(v * rampMax)));
+          }
+        }
+        gctx.drawImage(A.atlas, idx * cwD, 0, cwD, chD, c * cwD, r * chD, cwD, chD);
+      }
+    }
+    gctx.globalCompositeOperation = 'source-in';
+    gctx.imageSmoothingEnabled = false;
+    gctx.drawImage(A.src, 0, 0, cols, rows, 0, 0, cols * cwD, rows * chD);
+    applyView();
+    ctx.drawImage(A.glyphs, 0, 0, cols * cw, rows * ch);
+  };
+  return A;
+}
+let envAscii = null, cakeAscii = null;
+
+// =====================================================================
+// 2. The envelope
+// =====================================================================
+const env = { cx: 0, cy: 0, w: 0, h: 0 };
+const state = { cam: 0, drop: 0, flap: 0, sealScale: 1, sealAlpha: 1 };
+let banner = BANNER_DATA.banners.big, labelBox = null, sealBox = null;
+// The wax seal, drawn character by character so it reads as a heart even on a small screen.
+const SEAL = [
+  '  .d88b.   .d88b.  ',
+  ' d888888b.d888888b ',
+  ' 88888888888888888 ',
+  " `Y8888888888888P' ",
+  "   `Y888888888P'   ",
+  "     `Y88888P'     ",
+  "       `Y8P'       ",
+];
+
+function heartPath(g, x, y, size) {
+  g.beginPath();
+  for (let i = 0; i <= 60; i++) {
+    const t = (i / 60) * Math.PI * 2;
+    const hx = 16 * Math.sin(t) ** 3, hy = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+    g.lineTo(x + (hx * size) / 32, y - (hy * size) / 32);
+  }
+  g.closePath();
+}
+function tri(g, ax, ay, bx, by, cx, cy) { g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.lineTo(cx, cy); g.closePath(); }
+
+function paintEnvelope(g) {
+  const A = envAscii;
+  const x0 = env.cx - env.w / 2, x1 = env.cx + env.w / 2;
+  const y0 = env.cy - env.h / 2 + state.cam + state.drop, y1 = y0 + env.h;
+  const cx = env.cx, flapH = env.h * 0.5, cosF = Math.cos(state.flap);
+  g.lineWidth = Math.max(A.cw * 1.3, 2);
+  if (cosF < 0) { g.fillStyle = COLORS.flapInside; tri(g, x0, y0, x1, y0, cx, y0 + flapH * cosF); g.fill(); }
+  const grad = g.createLinearGradient(x0, y0, x1, y1);
+  grad.addColorStop(0, COLORS.bodyLight); grad.addColorStop(1, COLORS.bodyDark);
+  g.fillStyle = grad; g.fillRect(x0, y0, env.w, env.h);
+  g.fillStyle = COLORS.inside; tri(g, x0, y0, x1, y0, cx, y0 + env.h * 0.4); g.fill();
+  g.strokeStyle = COLORS.crease;
+  g.beginPath(); g.moveTo(x0, y1); g.lineTo(cx, y0 + env.h * 0.56); g.lineTo(x1, y1); g.stroke();
+  // The label, lined up with the character grid: letters in pink, the gaps between them in dim dots.
+  // It always starts below the seal, so the heart is never covered.
+  const bc = banner[0].length, br = banner.length;
+  sealBox = { c0: Math.round(cx / A.cw - SEAL[0].length / 2), r0: Math.round((y0 + flapH) / A.ch) - 3 };
+  const c0 = Math.round(cx / A.cw - bc / 2);
+  const r0 = Math.max(Math.round((y0 + env.h * 0.8) / A.ch - br / 2), sealBox.r0 + SEAL.length + 1);
+  for (let r = 0; r < br; r++) {
+    for (let c = 0; c < bc; c++) {
+      g.fillStyle = banner[r][c] === ' ' ? COLORS.labelDim : COLORS.label;
+      g.fillRect((c0 + c) * A.cw, (r0 + r) * A.ch, A.cw, A.ch);
+    }
+  }
+  labelBox = { c0, r0, bc, br };
+  if (cosF > 0) {
+    const apex = y0 + flapH * cosF;
+    g.fillStyle = COLORS.flap; tri(g, x0, y0, x1, y0, cx, apex); g.fill();
+    g.strokeStyle = COLORS.crease;
+    g.beginPath(); g.moveTo(x0, y0); g.lineTo(cx, apex); g.lineTo(x1, y0); g.stroke();
+  }
+  if (state.sealAlpha > 0.4) {
+    const pulse = Math.max(0, Math.sin(now * 5.5)) ** 8;                 // brightens on each heartbeat
+    g.fillStyle = phase === 'closed' && pulse > 0.3 ? COLORS.sealBeat : COLORS.seal;
+    const { c0: sc0, r0: sr0 } = sealBox;
+    SEAL.forEach((row, r) => Array.from(row).forEach((chx, c) => {
+      if (chx !== ' ') g.fillRect((sc0 + c) * A.cw, (sr0 + r) * A.ch, A.cw, A.ch);
+    }));
+  }
+}
+function labelOverride(c, r) {          // the seal's and the label's own characters
+  const s = sealBox;
+  if (s && state.sealAlpha > 0.4 && r >= s.r0 && r < s.r0 + SEAL.length && c >= s.c0 && c < s.c0 + SEAL[0].length) {
+    const chx = SEAL[r - s.r0][c - s.c0];
+    if (chx !== ' ') return chx;
+  }
+  const b = labelBox;
+  if (!b || c < b.c0 || c >= b.c0 + b.bc || r < b.r0 || r >= b.r0 + b.br) return undefined;
+  const ch = banner[r - b.r0][c - b.c0];
+  return ch === ' ' ? LABEL_FILL : ch;
+}
+let LABEL_FILL = '.';
+
+// =====================================================================
+// 3. Text measuring and the heart layout
+// =====================================================================
+const widthCache = new Map();
+function textWidth(text, size, weight = 700) {
+  const key = weight + '|' + text;
+  let w100 = widthCache.get(key);
+  if (w100 === undefined) { ctx.font = `${weight} 100px ${MONO}`; w100 = ctx.measureText(text).width; widthCache.set(key, w100); }
+  return (w100 * size) / 100;
+}
+// Safari reports the wrong width for some scripts (Hindi, Bengali, Tamil...), and some are much
+// taller than Latin letters. So we draw each phrase once on a hidden canvas and measure the pixels
+// it really covers: its true width, height, and how far its middle sits from where we aimed.
+const fitCache = new Map();
+const inkCanvas = document.createElement('canvas');
+const inkCtx = inkCanvas.getContext('2d', { willReadFrequently: true });
+function ink(t) {                                    // measurements in "ems" (multiply by font size)
+  let m = fitCache.get(t);
+  if (m) return m;
+  const F = 48;
+  inkCtx.font = `700 ${F}px ${MONO}`;
+  const w = Math.ceil(inkCtx.measureText(t).width * 2.5 + F * 3), h = Math.ceil(F * 2.6);
+  inkCanvas.width = w; inkCanvas.height = h;
+  inkCtx.font = `700 ${F}px ${MONO}`; inkCtx.textAlign = 'center'; inkCtx.textBaseline = 'middle'; inkCtx.fillStyle = '#fff';
+  inkCtx.fillText(t, w / 2, h / 2);
+  const d = inkCtx.getImageData(0, 0, w, h).data;
+  let minX = w, maxX = -1, minY = h, maxY = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (d[(y * w + x) * 4 + 3] > 40) { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; }
+    }
+  }
+  m = maxX < 0 ? { w: 0, h: 0, ox: 0, oy: 0 }    // nothing drawn: this phone has no font for it
+    : { w: (maxX - minX + 1) / F, h: (maxY - minY + 1) / F, ox: ((minX + maxX + 1) / 2 - w / 2) / F, oy: ((minY + maxY + 1) / 2 - h / 2) / F };
+  fitCache.set(t, m);
+  return m;
+}
+const phraseScale = t => Math.min(1, 1.1 / Math.max(ink(t).h, 0.01));   // shrink tall scripts to fit their row
+const fitWidth = (t, size) => ink(t).w * size * phraseScale(t);
+
+function makeMask(size, draw) {
+  const n = Math.ceil(size), c = document.createElement('canvas');
+  c.width = n; c.height = n;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.translate(n / 2, n / 2); draw(g);
+  const { data } = g.getImageData(0, 0, n, n);
+  return { inside(x, y) { const px = Math.round(x + n / 2), py = Math.round(y + n / 2); return px >= 0 && py >= 0 && px < n && py < n && data[(py * n + px) * 4 + 3] > 127; } };
+}
+function makePicker(list) {
+  const order = shuffle(list.slice()), uses = new Map(order.map(t => [t, 0]));
+  let last = '';
+  const pick = (room, size) => {
+    let best = null, bestUse = Infinity;
+    for (const t of order) {
+      if (t === last) continue;
+      const u = uses.get(t);
+      if (u < bestUse && fitWidth(t, size) <= room) { best = t; bestUse = u; if (u === 0) break; }
+    }
+    if (best === null) return null;
+    uses.set(best, bestUse + 1); last = best;
+    return best;
+  };
+  pick.best = (room, size, replacing) => {
+    const minW = fitWidth(replacing, size) + size * 0.3;
+    let best = null, score = Infinity;
+    for (const t of order) {
+      const w = fitWidth(t, size);
+      if (w > room || w < minW) continue;
+      const s = (room - w) / size + uses.get(t) * 1.5;
+      if (s < score) { score = s; best = t; }
+    }
+    if (best === null) return null;
+    uses.set(replacing, Math.max(0, uses.get(replacing) - 1)); uses.set(best, uses.get(best) + 1);
+    return best;
+  };
+  return pick;
+}
+function flowText(mask, { box, size, picker, lineGap = 1.42 }) {
+  const [x0, y0, x1, y1] = box, lh = size * lineGap, half = size * 0.42, gapMin = size * 0.8;
+  const band = (a, b) => mask.inside(a, b) && mask.inside(a, b - half) && mask.inside(a, b + half);
+  const slots = [], lines = Math.floor((y1 - y0) / lh), startB = y0 + ((y1 - y0) - lines * lh) / 2 + lh / 2;
+  for (let li = 0; li < lines; li++) {
+    const b = startB + li * lh;
+    let s = null;
+    for (let a = x0; a <= x1; a += 1) {
+      const ok = band(a, b);
+      if (ok && s === null) s = a;
+      if (s !== null && (!ok || a + 1 > x1)) { fillSpan(s, ok ? a : a - 1, b); s = null; }
+    }
+  }
+  function fillSpan(s, e, b) {
+    const len = e - s;
+    if (len < size * 0.9) return;
+    const items = []; let used = 0;
+    for (;;) {
+      const room = len - used - (items.length ? gapMin : 0);
+      if (room < size * 0.9) break;
+      const text = picker(room, size);
+      if (!text) break;
+      const w = fitWidth(text, size);
+      used += w + (items.length ? gapMin : 0); items.push({ text, w });
+    }
+    if (!items.length) return;
+    const leftover = len - (items.reduce((t, it) => t + it.w, 0) + gapMin * (items.length - 1));
+    if (leftover > size * 1.2) {
+      const last = items[items.length - 1], better = picker.best(last.w + leftover, size, last.text);
+      if (better) items[items.length - 1] = { text: better, w: fitWidth(better, size) };
+    }
+    const total = items.reduce((t, it) => t + it.w, 0);
+    let gap = items.length > 1 ? (len - total) / (items.length - 1) : 0;
+    gap = Math.min(gap, gapMin * 3.5);
+    let a = s + (len - (total + gap * (items.length - 1))) / 2;
+    for (const it of items) {
+      const sz = size * phraseScale(it.text), m = ink(it.text);
+      slots.push({ text: it.text, size: sz, w: it.w, x: a + it.w / 2 - m.ox * sz, y: b - m.oy * sz });
+      a += it.w + gap;
+    }
+  }
+  return slots;
+}
+const heartCurve = (t, k) => [16 * Math.sin(t) ** 3 * k, -(13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) * k - 2.535 * k];
+function buildHeart(S, f) {
+  const k = S / 32;
+  const path = g => { g.beginPath(); for (let i = 0; i <= 240; i++) { const [x, y] = heartCurve((i / 240) * Math.PI * 2, k); g.lineTo(x, y); } g.closePath(); };
+  const center = { y: -0.09 * S, size: f * 2.6 };
+  const bigW = textWidth('I love you', center.size);
+  const shape = makeMask(S * 1.05, g => { g.fillStyle = '#fff'; path(g); g.fill(); });
+  const area = makeMask(S * 1.05, g => {
+    g.fillStyle = '#fff'; path(g); g.fill();
+    g.clearRect(-bigW / 2 - f * 0.5, center.y - center.size * 0.62, bigW + f, center.size * 1.24);
+  });
+  const slots = flowText(area, { box: [-S / 2 - 4, -0.47 * S, S / 2 + 4, 0.47 * S], size: f, picker: makePicker(PHRASES.filter(t => ink(t).w > 0)) });
+  for (const sl of slots) {
+    const hw = sl.w / 2, hh = sl.size / 2;
+    sl.level = 9;
+    outer: for (let lv = 1; lv <= 8; lv++) {
+      const r = lv * sl.size * 1.2;
+      for (const [dx, dy] of [[-hw - r, 0], [hw + r, 0], [0, -hh - r], [0, hh + r], [-hw - r * 0.7, -hh - r * 0.7], [hw + r * 0.7, -hh - r * 0.7], [-hw - r * 0.7, hh + r * 0.7], [hw + r * 0.7, hh + r * 0.7]]) {
+        if (!shape.inside(sl.x + dx, sl.y + dy)) { sl.level = lv; break outer; }
+      }
+    }
+  }
+  return { slots, center, k, f };
+}
+function buildHeartFor(S, need) {
+  let f = S / 24, h = null;
+  for (let i = 0; i < 18; i++) { h = buildHeart(S, f); if (h.slots.length >= need) break; f *= 0.94; }
+  return h;
+}
+
+// =====================================================================
+// 4. Layout: letter, heart, rivers, cake
+// =====================================================================
+let words = [], letterPx = 14, P = 0, colW = 0, colLeft = 0, lh = 20, letterTop = 0, letterBottom = 0;
+let heart = null, hc = { x: 0, y: 0 }, S = 0, rivers = {}, spares = [], camHeart = 0, loveIdx = -1;
+const cake = { img: null, x: 0, y: 0, w: 0, h: 0 };
+const orb = { R: 0 };
+const ui = { giftY: 0, finalY: 0, buttonTop: 0, giftSize: 20, finalSize: 24 };
+
+function layoutLetter() {
+  colW = Math.min(W * 0.64, 440);
+  letterPx = Math.max(12.5, Math.min(16, W / 29));
+  let lines;
+  for (let tries = 0; tries < 8; tries++) {
+    ctx.font = `400 ${letterPx}px ${MONO}`;
+    const space = ctx.measureText(' ').width;
+    lh = letterPx * 1.55;
+    words = []; lines = 0;
+    let x = 0;
+    for (const para of CONFIG.letter.split('\n')) {
+      if (para === '') { lines++; continue; }
+      for (const text of para.split(' ')) {
+        const w = ctx.measureText(text).width;
+        if (x > 0 && x + space + w > colW) { lines++; x = 0; }
+        if (x > 0) x += space;
+        words.push({ text, cx: x + w / 2, line: lines, w });
+        x += w;
+      }
+      lines++; x = 0;
+    }
+    if (CONFIG.signature) {                              // the signature sits at the bottom right
+      lines++;
+      for (const sigLine of CONFIG.signature.split('\n')) {
+        const parts = sigLine.split(' '), ws = parts.map(t => ctx.measureText(t).width);
+        let sx = colW - (ws.reduce((a, b) => a + b, 0) + space * (parts.length - 1));
+        parts.forEach((t, j) => { words.push({ text: t, cx: sx + ws[j] / 2, line: lines, w: ws[j] }); sx += ws[j] + space; });
+        lines++;
+      }
+    }
+    if (lines * lh < H * 0.74) break;
+    letterPx *= 0.94;
+  }
+  const blockH = lines * lh;
+  const topScreen = Math.max(H * 0.06, (H * 0.84 - blockH) / 2);
+  colLeft = (W - colW) / 2;
+  letterTop = topScreen - P;
+  letterBottom = letterTop + blockH;
+  words.forEach((wd, i) => {
+    wd.x = colLeft + wd.cx; wd.y = letterTop + wd.line * lh + lh / 2;
+    wd.side = wd.x < W / 2 ? -1 : 1;
+    wd.sway = Math.sin(i * 0.35) * env.w * 0.14;
+    wd.special = false;
+  });
+  loveIdx = words.findIndex((w, i) => w.text === 'I' && words[i + 1]?.text === 'love' && /^you\b/.test(words[i + 2]?.text || ''));
+  if (loveIdx >= 0) for (let j = 0; j < 3; j++) words[loveIdx + j].special = true;
+}
+
+function buildRiver(side) {
+  const gut = Math.min(55, (W - colW) / 4);
+  const xg = side < 0 ? colLeft - gut : colLeft + colW + gut;
+  const amp = Math.min(13, gut * 0.38), freq = (Math.PI * 2) / 210, ph = side < 0 ? 0 : 1.9;
+  const pts = [];
+  for (let y = letterTop - 6; y <= letterBottom + 30; y += 4) pts.push([xg + amp * Math.sin((y - letterTop) * freq + ph), y]);
+  const segA = pts.length;
+  const tStart = side < 0 ? 1.5 * Math.PI : 0.5 * Math.PI;
+  const hp = t => { const [x, y] = heartCurve(t, heart.k); return [hc.x + x, hc.y + y]; };
+  const p0 = pts[pts.length - 1], p3 = hp(tStart);
+  const p1 = [p0[0], lerp(p0[1], p3[1], 0.5)], p2 = [p3[0], lerp(p3[1], p0[1], 0.35)];
+  for (let i = 1; i <= 40; i++) { const u = i / 40; pts.push([bez(p0[0], p1[0], p2[0], p3[0], u), bez(p0[1], p1[1], p2[1], p3[1], u)]); }
+  const segC = pts.length;
+  for (let i = 1; i <= 120; i++) pts.push(hp(tStart + (Math.PI - tStart) * (i / 120)));
+  const len = [0];
+  for (let i = 1; i < pts.length; i++) len.push(len[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+  return { pts, len, segA, segC, xg };
+}
+function riverAt(rv, d) {
+  const { pts, len } = rv;
+  d = Math.max(0, Math.min(len[len.length - 1], d));
+  let lo = 0, hi = len.length - 1;
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (len[mid] < d) lo = mid; else hi = mid; }
+  const u = (d - len[lo]) / (len[hi] - len[lo] || 1);
+  const [ax, ay] = pts[lo], [bx, by] = pts[hi];
+  return { x: lerp(ax, bx, u), y: lerp(ay, by, u), ang: Math.atan2(by - ay, bx - ax) };
+}
+function arcAtY(rv, y) { for (let i = 0; i < rv.segA; i++) if (rv.pts[i][1] >= y) return rv.len[i]; return rv.len[rv.segA - 1]; }
+function nearestOnHeart(rv, x, y) {
+  let best = rv.len[rv.segC], bd = Infinity;
+  for (let i = rv.segC; i < rv.pts.length; i++) {
+    const d = (rv.pts[i][0] - x) ** 2 + (rv.pts[i][1] - y) ** 2;
+    if (d < bd) { bd = d; best = rv.len[i]; }
+  }
+  return best;
+}
+function heartColor() {
+  const v = rand(0.72, 1), c = CONFIG.red.map(x => x * v);
+  return Math.random() < 0.12 ? mix(c, [255, 200, 205], 0.3) : c;
+}
+
+function layoutAll() {
+  W = window.innerWidth; H = window.innerHeight; DPR = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+  view = { k: 1, ox: 0, oy: 0 };
+  envAscii = makeAscii(Math.max(7, Math.min(10.5, W / 46)), BANNER_DATA.chars + Array.from(new Set(SEAL.join(''))).join(''));
+  cakeAscii = makeAscii(Math.max(5.2, Math.min(8, W / 68)));
+  env.w = Math.min(W * 0.84, 460); env.h = env.w * 0.68; env.cx = W / 2; env.cy = H * 0.47;
+  const envCols = env.w / envAscii.cw;                     // pick the biggest banner that fits
+  banner = ['big', 'standard', 'small'].map(k => BANNER_DATA.banners[k]).find(b => b[0].length <= envCols - 4) || BANNER_DATA.banners.small;
+  P = H * 0.86 - (env.cy - env.h / 2);
+  layoutLetter();
+  positionUI();
+
+  const travelers = words.filter(w => !w.special);
+  S = Math.min(W * 0.9, H * 0.62);
+  heart = buildHeartFor(S, travelers.length);
+  hc = { x: W / 2, y: Math.max(letterBottom + H * 0.16, H - P + 40) + S * 0.47 };
+  camHeart = H / 2 - hc.y;
+  rivers = { [-1]: buildRiver(-1), [1]: buildRiver(1) };
+
+  // The heart has a few more spots than words. Those spares are scattered through the inside
+  // (not bunched in one corner) and fill in while the view scrolls down, so the heart is whole
+  // by the time Britt sees it, except for the big "I love you".
+  const all = heart.slots.map(s => ({ ...s, x: hc.x + s.x, y: hc.y + s.y }));
+  const spareCount = Math.max(0, all.length - travelers.length);
+  const pool = shuffle(all.filter(s => s.level >= 2));
+  spares = pool.slice(0, spareCount);
+  if (spares.length < spareCount) spares.push(...shuffle(all.filter(s => !spares.includes(s))).slice(0, spareCount - spares.length));
+  const slots = all.filter(s => !spares.includes(s)).sort((a, b) => a.x - b.x);
+  const left = travelers.filter(w => w.side < 0), right = travelers.filter(w => w.side > 0);
+  const sideSlots = { [-1]: slots.slice(0, left.length), [1]: slots.slice(left.length, left.length + right.length) };
+  for (const [side, list] of [[-1, left], [1, right]]) {
+    const rv = rivers[side];
+    const mine = sideSlots[side].map(s => ({ ...s, exitArc: nearestOnHeart(rv, s.x, s.y) }))
+      .sort((a, b) => a.level - b.level || b.exitArc - a.exitArc);
+    list.forEach((wd, i) => {
+      const sl = mine[i];
+      wd.slot = sl; wd.exitArc = sl.exitArc;
+      wd.v = rand(...CONFIG.riverSpeed);
+      // Glide into the river: start from rest, speed up, and join the current at its own speed.
+      const dx = Math.abs(rv.xg - wd.x);
+      wd.entryArc = arcAtY(rv, wd.y + 34 + dx * 0.55);
+      wd.liftT = Math.min(2.2, Math.max(1.1, 0.9 + dx / 140));
+      wd.heartCol = heartColor();
+    });
+  }
+  const big = heart.center.size, parts = ['I', 'love', 'you'], sp = textWidth(' ', big);
+  const total = parts.reduce((t, p) => t + textWidth(p, big), 0) + sp * 2;
+  let x = hc.x - total / 2;
+  parts.forEach((p, j) => {
+    const w = textWidth(p, big);
+    if (loveIdx >= 0) words[loveIdx + j].bigTarget = { x: x + w / 2, y: hc.y + heart.center.y, size: big, text: p };
+    x += w + sp;
+  });
+  spares.forEach(s => { s.col = heartColor(); s.delay = rand(0, 0.9); });
+
+  // The cake takes the heart's place.
+  const ar = cake.img.height / cake.img.width;
+  cake.w = Math.min(W * 0.92, 540, (H * 0.66) / ar); cake.h = cake.w * ar;
+  cake.x = hc.x - cake.w / 2; cake.y = hc.y - cake.h * 0.47;
+  cake.candles = CAKE_CANDLES.map(c => ({ x: cake.x + c.x * cake.w, top: cake.y + c.top * cake.h, wickTop: cake.y + c.top * cake.h - cake.h * 0.019 }));
+  buildCakeCells();
+
+  // The orb and its stand sit where the camera stops after following the smoke up.
+  // Last screen, top to bottom: "Here is your gift", the orb on its stand, "Happy Birthday Baby",
+  // then the button. Everything is measured from the screen so it's centered on phones and computers.
+  const camEnd = camHeart + H * 0.7;
+  const safeBottom = parseFloat(getComputedStyle(document.documentElement).paddingBottom) || 0;
+  ui.giftSize = Math.min(W * 0.06, 26); ui.finalSize = Math.min(W * 0.068, 30);
+  ui.giftY = Math.max(H * 0.15, 80);
+  ui.buttonTop = H - safeBottom - 26 - 44;
+  ui.finalY = ui.buttonTop - 32;
+  const areaTop = ui.giftY + ui.giftSize / 2 + 26, areaBottom = ui.finalY - ui.finalSize / 2 - 22;
+  const D = Math.min(W * 0.5, (areaBottom - areaTop) / 1.76, 300);
+  orb.D = D; orb.R = D / 2; orb.cx = W / 2;
+  orb.cy = (areaTop + areaBottom) / 2 - camEnd - 0.38 * D;       // sphere center (the whole piece is ~1.76 D tall)
+  orb.coneTop = orb.cy + 0.44 * D; orb.coneH = 0.22 * D; orb.coneW = 0.25 * D;
+  orb.woodTop = orb.coneTop + orb.coneH - 0.01 * D; orb.woodRx = 0.78 * D; orb.woodRy = 0.18 * D; orb.woodThick = 0.4 * D;
+  orb.needles = buildNeedles();
+  positionUI();
+  makeStars();
+}
+
+// Shrink the cake picture to exactly one pixel per character cell by averaging every pixel it
+// covers. Browsers shrink pictures differently (Safari skips pixels), which punched holes in the
+// cake and made characters blink while it moved; doing it ourselves looks the same everywhere.
+function buildCakeCells() {
+  const A = cakeAscii, iw = cake.img.width, ih = cake.img.height;
+  const gc = Math.max(1, Math.round(cake.w / A.cw)), gr = Math.max(1, Math.round(cake.h / A.ch));
+  const tmp = document.createElement('canvas'); tmp.width = iw; tmp.height = ih;
+  const t = tmp.getContext('2d', { willReadFrequently: true });
+  t.drawImage(cake.img, 0, 0);
+  const sd = t.getImageData(0, 0, iw, ih).data, out = new ImageData(gc, gr);
+  for (let r = 0; r < gr; r++) {
+    const y0 = Math.floor((r * ih) / gr), y1 = Math.max(y0 + 1, Math.floor(((r + 1) * ih) / gr));
+    for (let c = 0; c < gc; c++) {
+      const x0 = Math.floor((c * iw) / gc), x1 = Math.max(x0 + 1, Math.floor(((c + 1) * iw) / gc));
+      let R = 0, G = 0, B = 0, Al = 0, n = 0;
+      for (let y = y0; y < y1; y++) {
+        for (let x = x0; x < x1; x++) {
+          const k = (y * iw + x) * 4, a = sd[k + 3];
+          R += sd[k] * a; G += sd[k + 1] * a; B += sd[k + 2] * a; Al += a; n++;
+        }
+      }
+      const o = (r * gc + c) * 4;
+      if (Al > 0) { out.data[o] = R / Al; out.data[o + 1] = G / Al; out.data[o + 2] = B / Al; }
+      out.data[o + 3] = Al / n;
+    }
+  }
+  cake.cells = document.createElement('canvas'); cake.cells.width = gc; cake.cells.height = gr;
+  cake.cells.getContext('2d').putImageData(out, 0, 0);
+  cake.gc = gc; cake.gr = gr;
+}
+
+// =====================================================================
+// The crystal orb: tourmalinated quartz on a brass cone and a wood slice
+// ---------------------------------------------------------------------
+// The orb is drawn by "ray casting": for every character cell over the orb we work out what
+// you'd see looking straight through the glass at that spot: a soft glassy body, a bright rim,
+// a highlight, misty veils inside, and the black needles. The needles are 3D lines inside the
+// sphere, traced from Logan's photo (with a few extra for the back), so turning the orb moves them.
+// =====================================================================
+const NEEDLE_DATA = [   // from the photo: x1, y1, x2, y2, thickness (photo pixels; sphere center 430,362, radius 375)
+  [268, 88, 390, 612, 9], [425, 168, 470, 322, 16], [566, 108, 551, 422, 9], [650, 122, 548, 255, 6],
+  [430, 326, 780, 358, 7], [250, 228, 378, 172, 7], [85, 430, 238, 252, 4], [92, 440, 292, 356, 7],
+  [318, 580, 372, 510, 14], [265, 300, 360, 338, 5], [586, 352, 590, 474, 4], [372, 683, 556, 668, 3],
+  [640, 372, 778, 512, 8, 1], [352, 32, 380, 165, 6],
+];
+function buildNeedles() {
+  const list = NEEDLE_DATA.map(([x1, y1, x2, y2, t, back], i) => {
+    const pt = (x, y, k) => {
+      const nx = (x - 430) / 375, ny = (y - 362) / 375;
+      const zMax = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny)) * 0.85;
+      let z = (hash2(i * 3.1 + 1, k) * 2 - 1) * zMax;
+      if (back) z = -Math.abs(z);
+      return [nx, ny, z];
+    };
+    return { a: pt(x1, y1, 1), b: pt(x2, y2, 2), r: Math.max(t / 2 / 375, 0.006) };
+  });
+  for (let k = 0; k < 6; k++) {                    // thin ones for the side the photo can't show
+    const th = hash2(k, 7) * Math.PI * 2, ph = (hash2(k, 9) - 0.5) * 2.4, len = 0.25 + hash2(k, 17) * 0.35;
+    const c = [(hash2(k, 11) - 0.5) * 0.9, (hash2(k, 13) - 0.5) * 0.9, -0.3 - hash2(k, 15) * 0.35];
+    const d = [Math.cos(th) * Math.cos(ph), Math.sin(ph), Math.sin(th) * Math.cos(ph)];
+    const clampIn = p => { const m = Math.hypot(...p); return m > 0.92 ? p.map(v => (v * 0.92) / m) : p; };
+    list.push({ a: clampIn(c.map((v, j) => v - d[j] * len)), b: clampIn(c.map((v, j) => v + d[j] * len)), r: 0.007 });
+  }
+  return list;
+}
+function h3(x, y, z) { const v = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453; return v - Math.floor(v); }
+function vnoise(x, y, z) {                       // smooth 3D noise for the misty veils inside the quartz
+  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+  let u = x - xi, v = y - yi, w = z - zi;
+  u = u * u * (3 - 2 * u); v = v * v * (3 - 2 * v); w = w * w * (3 - 2 * w);
+  const L = (a, b, t) => a + (b - a) * t;
+  return L(L(L(h3(xi, yi, zi), h3(xi + 1, yi, zi), u), L(h3(xi, yi + 1, zi), h3(xi + 1, yi + 1, zi), u), v),
+           L(L(h3(xi, yi, zi + 1), h3(xi + 1, yi, zi + 1), u), L(h3(xi, yi + 1, zi + 1), h3(xi + 1, yi + 1, zi + 1), u), v), w);
+}
+function segDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1e-9;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+  return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+}
+const orbBuf = document.createElement('canvas'), orbBufCtx = orbBuf.getContext('2d');
+let orbImg = null;
+
+function shadeOrb(img, c0, r0, gcN, grN, A, Ox, Oy, R, reveal, needleAmt, theta) {
+  const d = img.data, co = Math.cos(theta), si = Math.sin(theta), cell = A.cw / R;
+  const rot = p => [p[0] * co + p[2] * si, p[1], -p[0] * si + p[2] * co];   // spin around the vertical axis
+  const ns = orb.needles.map(n => { const a = rot(n.a), b = rot(n.b); return { ax: a[0], ay: a[1], bx: b[0], by: b[1], r: Math.max(n.r, cell * 0.55) }; });
+  const lx = Math.cos(now * 0.7), lz = Math.sin(now * 0.7);                // a rim light that circles the orb
+  for (let j = 0; j < grN; j++) {
+    for (let i = 0; i < gcN; i++) {
+      const o = (j * gcN + i) * 4;
+      const u = ((c0 + i + 0.5) * A.cw - Ox) / R, v = ((r0 + j + 0.5) * A.ch - Oy) / R, rr = u * u + v * v;
+      if (rr > 1 || Math.sqrt(rr) > reveal * 1.15 - hash2(c0 + i, r0 + j) * 0.15) { d[o + 3] = 0; continue; }
+      const zf = Math.sqrt(1 - rr), fres = Math.pow(1 - zf, 2.4);
+      let L = 0.34 + 0.16 * (v + 1) / 2 + 0.5 * fres;                              // glassy body, brighter rim
+      L += Math.pow(Math.max(0, u * 0.244 - v * 0.298 + zf * 0.922), 60);          // highlight, upper right
+      L += Math.pow(Math.max(0, u * lx * 0.97 - v * 0.15 + zf * lz * 0.97), 6) * fres * 0.9;
+      let veil = 0;
+      for (const zs of [0.55, 0, -0.55]) {
+        const z = zs * zf, ox = u * co - z * si, oz = u * si + z * co;           // back into the orb's own space
+        veil += Math.max(0, vnoise(ox * 2.3 + 7, v * 2.3 + 3, oz * 2.3) - 0.58) * 2.6;
+      }
+      L += 0.16 * Math.min(1, veil);
+      let cov = 0;                                                                 // how much a needle covers this cell
+      for (const n of ns) {
+        const c = clamp01((n.r + cell * 0.35 - segDist(u, v, n.ax, n.ay, n.bx, n.by)) / (cell * 0.7));
+        if (c > cov) cov = c;
+      }
+      L = Math.min(1, L * (1 - 0.93 * cov * needleAmt));
+      const warm = clamp01(0.1 - u * 0.55 + v * 0.65) * 0.45;                    // the warm glow, lower left
+      d[o] = lerp(225, 246, warm) * L; d[o + 1] = lerp(232, 228, warm) * L; d[o + 2] = lerp(244, 165, warm) * L; d[o + 3] = 255;
+    }
+  }
+}
+
+const woodR = a => 1 + 0.075 * Math.sin(5 * a + 0.6) + 0.045 * Math.sin(3 * a + 2.1) + 0.03 * Math.sin(7 * a + 1.3);
+function paintStand(g, cam, theta, woodReveal, coneReveal) {
+  const D = orb.D, cx = orb.cx, top = orb.woodTop + cam, rx = orb.woodRx, ry = orb.woodRy, th = orb.woodThick;
+  const lw = Math.max(1, cakeAscii.cw * 0.9);
+  if (woodReveal > 0) {
+    const bottom = top + ry * 1.2 + th, clipTop = lerp(bottom, top - ry * 1.3, woodReveal);
+    g.save(); g.beginPath(); g.rect(cx - rx * 1.4, clipTop, rx * 2.8, bottom - clipTop + 2); g.clip();   // builds from the bottom up
+    const N = 90, P = [];
+    for (let i = 0; i <= N; i++) { const f = (i / N) * Math.PI * 2, r = woodR(f - theta); P.push([cx + rx * r * Math.cos(f), top + ry * r * Math.sin(f)]); }
+    const half = P.slice(0, N / 2 + 1);                                           // the near edge of the slice
+    const bark = g.createLinearGradient(cx - rx, 0, cx + rx, 0);
+    bark.addColorStop(0, '#3d2c21'); bark.addColorStop(0.35, '#937055'); bark.addColorStop(0.6, '#7a5b42'); bark.addColorStop(1, '#33251b');
+    g.fillStyle = bark; g.beginPath();
+    half.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    for (let i = half.length - 1; i >= 0; i--) g.lineTo(half[i][0], half[i][1] + th);
+    g.closePath(); g.fill();
+    g.lineWidth = lw;
+    for (let k = 0; k < 46; k++) {                                                // bark ridges that slide around as it turns
+      const a = (k / 46) * Math.PI * 2 + hash2(k, 3) * 0.1, f = a + theta, sn = Math.sin(f);
+      if (sn < 0.05) continue;
+      const r = woodR(a), x = cx + rx * r * Math.cos(f), y = top + ry * r * sn;
+      g.strokeStyle = hash2(k, 5) > 0.5 ? '#c09a73' : '#241911';
+      g.beginPath(); g.moveTo(x, y + th * 0.1); g.lineTo(x + (hash2(k, 8) - 0.5) * 4, y + th * (0.5 + 0.45 * hash2(k, 6))); g.stroke();
+    }
+    const tg = g.createRadialGradient(cx, top, 0, cx, top, rx);                   // the cut top of the wood
+    tg.addColorStop(0, '#d39a6c'); tg.addColorStop(0.7, '#b77a4e'); tg.addColorStop(1, '#8e5a37');
+    g.fillStyle = tg; g.beginPath(); P.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.fill();
+    g.strokeStyle = '#4a2a19';
+    for (let k = 0; k < 7; k++) {                                                 // cracks running out from the center
+      const a = (k / 7) * Math.PI * 2 + hash2(k, 21) * 0.5, f = a + theta, r = woodR(a) * 0.93;
+      g.beginPath(); g.moveTo(cx, top);
+      g.quadraticCurveTo(cx + rx * r * 0.5 * Math.cos(f + 0.12), top + ry * r * 0.5 * Math.sin(f + 0.12), cx + rx * r * Math.cos(f), top + ry * r * Math.sin(f));
+      g.stroke();
+    }
+    g.strokeStyle = '#3a271b'; g.lineWidth = lw * 1.3;
+    g.beginPath(); P.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); g.stroke();
+    g.restore();
+  }
+  if (coneReveal > 0) {                                                           // the brass cone
+    const ct = orb.coneTop + cam, w = orb.coneW, h = orb.coneH;
+    const clipTop = lerp(ct + h + 4, ct - 6, coneReveal);
+    g.save(); g.beginPath(); g.rect(cx - w * 1.5, clipTop, w * 3, ct + h + 12 - clipTop); g.clip();
+    const gg = g.createLinearGradient(cx - w, 0, cx + w, 0);
+    gg.addColorStop(0, '#5e4720'); gg.addColorStop(0.3, '#d8b45e'); gg.addColorStop(0.45, '#f7e6a6'); gg.addColorStop(0.7, '#a9832f'); gg.addColorStop(1, '#4f3b19');
+    g.fillStyle = gg; g.beginPath();
+    g.moveTo(cx - w, ct); g.lineTo(cx + w, ct); g.lineTo(cx + D * 0.03, ct + h); g.lineTo(cx - D * 0.03, ct + h); g.closePath(); g.fill();
+    g.fillStyle = '#8a6a2c'; g.fillRect(cx - D * 0.02, ct + h, D * 0.04, D * 0.03);
+    g.restore();
+  }
+}
+
+function paintOrb(g) {
+  if (now < tOrb) return;
+  const k = now - tOrb, cam = state.cam, A = cakeAscii, theta = k * ((Math.PI * 2) / 14);   // one turn every 14 s
+  paintStand(g, cam, theta, smooth(clamp01(k / 1.1)), smooth(clamp01((k - 0.9) / 0.5)));
+  const reveal = smooth(clamp01((k - 1.1) / 1.5)), needleAmt = smooth(clamp01((k - 2.2) / 1.0));
+  if (reveal <= 0) return;
+  const R = orb.R, Ox = orb.cx, Oy = orb.cy + cam;
+  const c0 = Math.floor((Ox - R) / A.cw), c1 = Math.ceil((Ox + R) / A.cw), r0 = Math.floor((Oy - R) / A.ch), r1 = Math.ceil((Oy + R) / A.ch);
+  const gcN = c1 - c0, grN = r1 - r0;
+  if (!orbImg || orbBuf.width !== gcN || orbBuf.height !== grN) { orbBuf.width = gcN; orbBuf.height = grN; orbImg = orbBufCtx.createImageData(gcN, grN); }
+  shadeOrb(orbImg, c0, r0, gcN, grN, A, Ox, Oy, R, reveal, needleAmt, theta);
+  orbBufCtx.putImageData(orbImg, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(orbBuf, c0 * A.cw, r0 * A.ch, gcN * A.cw, grN * A.ch);
+}
+const paintScene = g => { paintCake(g); paintOrb(g); };
+
+function drawOrbExtras() {
+  if (now < tOrb + 2.4) return;
+  const appear = smooth(clamp01((now - tOrb - 2.4) / 1.2)), R = orb.R, Ox = orb.cx, Oy = orb.cy + state.cam;
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';                          // a soft glow around the orb
+  const gr = ctx.createRadialGradient(Ox, Oy, R * 0.6, Ox, Oy, R * 1.6);
+  gr.addColorStop(0, `rgba(200,215,255,${0.1 * appear})`); gr.addColorStop(1, 'rgba(200,215,255,0)');
+  ctx.fillStyle = gr; ctx.fillRect(Ox - R * 1.6, Oy - R * 1.6, R * 3.2, R * 3.2);
+  ctx.restore();
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#dfe6ff';
+  ctx.font = `700 ${cakeAscii.fontPx * 1.5}px ${MONO}`;
+  for (let i = 0; i < 22; i++) {                                                 // little lights circling it
+    const a = now * (0.35 + hash2(i, 1) * 0.25) + i * 2.4, tilt = (hash2(i, 2) - 0.5) * 0.5, rr = R * (1.25 + hash2(i, 3) * 0.35);
+    const x = Ox + Math.cos(a) * rr, z = Math.sin(a), y = Oy + z * rr * 0.22 + Math.cos(a) * rr * tilt;
+    if (z < 0 && Math.hypot(x - Ox, y - Oy) < R) continue;                       // hidden while behind the orb
+    ctx.globalAlpha = appear * (0.25 + 0.45 * (z + 1) / 2);
+    ctx.fillText(z > 0.6 ? '*' : '·', x, y);
+  }
+  ctx.fillStyle = '#ffffff';
+  for (let i = 0; i < 3; i++) {                                                  // star glints on the glass
+    const period = 2.6, ph = (now + i * 0.9) % period, life = 0.7;
+    if (ph > life) continue;
+    const seed = Math.floor((now + i * 0.9) / period) * 3 + i, s = Math.sin((ph / life) * Math.PI);
+    const gx = Ox + (0.1 + hash2(seed, 1) * 0.6) * R * (hash2(seed, 2) > 0.5 ? 1 : -0.6), gy = Oy - (0.2 + hash2(seed, 3) * 0.6) * R;
+    ctx.globalAlpha = appear * s; ctx.font = `700 ${cakeAscii.fontPx * (1.4 + 1.6 * s)}px ${MONO}`;
+    ctx.fillText('+', gx, gy);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// =====================================================================
+// 5. Timeline
+// =====================================================================
+let phase = 'intro', now = 0, t0 = 0, tTap = 0, tFlow = 0;
+let tDrop = Infinity, tRead = Infinity, tScroll = Infinity, tFinale = Infinity, tCake = Infinity, tLit = Infinity, tBlow = Infinity, tOrb = Infinity;
+let rereadShown = false;
+let remnants = [], crumbs = [], puffs = [], lastPuff = 0;
+
+function restart() {
+  layoutAll();
+  phase = 'intro'; t0 = now; tTap = 0; tFlow = 0;
+  tDrop = tRead = tScroll = tFinale = tCake = tLit = tBlow = tOrb = Infinity;
+  Object.assign(state, { cam: 0, drop: 0, flap: 0, sealScale: 1, sealAlpha: 1 });
+  burst = []; remnants = []; crumbs = []; puffs = [];
+  hint.classList.remove('show'); rereadBtn.classList.remove('show'); letterView.classList.remove('show'); rereadShown = false;
+}
+
+// Keep the screen awake for the whole show: the letter part has no taps, and phones dim
+// after 30 seconds. Works on iPhones with iOS 16.4 or newer.
+let wakeLock = null;
+async function keepAwake() {
+  try {
+    if ('wakeLock' in navigator && !wakeLock) {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) { /* not available: the phone's Auto-Lock setting decides */ }
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && tTap) keepAwake(); });
+
+function open() {
+  if (phase !== 'closed') return;
+  phase = 'opening'; tTap = now;
+  keepAwake();
+  hint.classList.remove('show');
+  const sy = env.cy - env.h / 2 + env.h * 0.5;
+  for (let i = 0; i < 18; i++) {
+    const a = rand(0, Math.PI * 2), d = rand(40, 110);
+    burst.push({ c: '♥*+·'[i % 4], x: env.cx, y: sy, vx: Math.cos(a) * d, vy: Math.sin(a) * d, t0: now, life: rand(0.6, 1.1) });
+  }
+}
+
+function startReading() {
+  phase = 'read'; tRead = now;
+  let lastArrive = 0;
+  words.forEach((wd, i) => {
+    wd.tRed = tRead + i * CONFIG.readPace;
+    wd.tLeave = wd.tRed + CONFIG.leaveDelay + rand(-0.25, 0.25);
+    if (!wd.special) lastArrive = Math.max(lastArrive, wd.tLeave + wd.liftT + (wd.exitArc - wd.entryArc) / wd.v + 0.9);
+  });
+  tScroll = tRead + (words.length - 1) * CONFIG.readPace + 1.0;
+  tFinale = Math.max(lastArrive, tScroll + 3.4) + 0.3;
+  tCake = tFinale + CONFIG.heartHold;
+}
+
+// The heart breaks apart: every word becomes a few falling characters.
+function startCake() {
+  phase = 'toCake';
+  remnants = [];
+  words.forEach(wd => {
+    if (wd.special) { const T = wd.bigTarget; remnants.push({ x: T.x, y: T.y, size: T.size, text: T.text, col: [255, 70, 88] }); }
+    else remnants.push({ x: wd.slot.x, y: wd.slot.y, size: wd.slot.size, text: wd.slot.text, col: wd.heartCol });
+  });
+  spares.forEach(s => remnants.push({ x: s.x, y: s.y, size: s.size, text: s.text, col: s.col }));
+  crumbs = [];
+  for (const r of remnants) {
+    const w = textWidth(r.text, r.size), n = Math.max(1, Math.min(4, Math.round(w / (r.size * 1.5))));
+    for (let j = 0; j < n; j++) {
+      crumbs.push({ x: r.x - w / 2 + (w * (j + 0.5)) / n, y: r.y, vx: rand(-30, 30), vy: rand(-70, -10), col: r.col,
+        c: '@#%&$*+=xo'[Math.floor(Math.random() * 10)], delay: 0.45 + rand(0, 1.3), gone: false });
+    }
+  }
+}
+
+function blow() {
+  if (phase !== 'cake') return;
+  phase = 'blow'; tBlow = now; lastPuff = now;
+}
+
+function update() {
+  const t = now - t0;
+  if (phase === 'intro' && t > 1.5) { phase = 'closed'; hint.classList.add('show'); }
+  if (phase === 'closed') state.sealScale = 1 + 0.07 * Math.max(0, Math.sin(now * 5.5)) ** 8;
+  if (tTap) {
+    const k = now - tTap;
+    state.sealScale = 1 + 0.6 * smooth(clamp01(k / 0.3));
+    state.sealAlpha = 1 - smooth(clamp01(k / 0.3));
+    state.flap = Math.PI * 0.64 * inOut(clamp01((k - 0.25) / 0.8));
+    state.cam = P * inOut(clamp01((k - 1.6) / 3.2));
+    if (phase === 'opening' && k > 1.05) {
+      phase = 'flow'; tFlow = now;
+      tDrop = tFlow + (words.length - 1) * CONFIG.wordGap + 0.5;
+    }
+  }
+  if (now > tScroll) state.cam = lerp(P, camHeart, inOut(clamp01((now - tScroll) / 3.4)));
+  if (now > tBlow) state.cam = camHeart + H * 0.7 * inOut(clamp01((now - tBlow - 1.0) / 4.7));   // follow the smoke up
+  state.drop = H * 1.3 * Math.pow(clamp01((now - tDrop) / 1.2), 2.4);
+  if (phase === 'flow' && now > tFlow + (words.length - 1) * CONFIG.wordGap + CONFIG.flight + 1.0) startReading();
+  if (phase === 'read' && now > tFinale) phase = 'finale';
+  if (phase === 'finale' && now > tCake) startCake();
+  if (phase === 'toCake' && now > tCake + 3.3) { phase = 'cake'; tLit = now; }
+  if (phase === 'blow' && now > tBlow + 4.2) { phase = 'orb'; tOrb = tBlow + 4.2; }        // the stand starts building
+  if (phase === 'orb' && !rereadShown && now > tOrb + 3.4 + 15) { rereadShown = true; rereadBtn.classList.add('show'); }
+}
+
+// =====================================================================
+// 6. Where is each word right now?
+// =====================================================================
+function wordState(wd, i) {
+  if (!tFlow || phase === 'opening') return null;
+  const te = tFlow + i * CONFIG.wordGap;
+  if (now < te) return null;
+  const base = { size: letterPx, weight: 400, text: wd.text, alpha: 1, glow: 0, ang: 0 };
+
+  if (now < te + CONFIG.flight) {                       // a) pulled out of the envelope
+    const u = (now - te) / CONFIG.flight, e = inOut(u);
+    const mx = env.cx, my = env.cy - env.h / 2 + env.h * 0.24, dy = my - wd.y;
+    const c1x = mx + wd.sway, c1y = my - dy * 0.5, c2x = lerp(wd.x, mx, 0.15), c2y = wd.y + dy * 0.3;
+    let ang = Math.atan2(bezD(my, c1y, c2y, wd.y, e), bezD(mx, c1x, c2x, wd.x, e)) + Math.PI;
+    if (ang > Math.PI) ang -= Math.PI * 2;
+    ang *= 1 - smooth(clamp01((u - 0.55) / 0.45));
+    return { ...base, x: bez(mx, c1x, c2x, wd.x, e), y: bez(my, c1y, c2y, wd.y, e), ang, col: CONFIG.ink, alpha: smooth(clamp01(u / 0.04)), clip: true };
+  }
+  const red = smooth(clamp01((now - (wd.tRed ?? Infinity)) / 0.35));
+  const col = mix(CONFIG.ink, CONFIG.red, red);
+  const glow = red > 0.05 ? 7 * red : 0;
+
+  if (wd.special) {                                      // b) "I love you" waits, then goes to the center
+    if (phase !== 'finale') return { ...base, x: wd.x, y: wd.y, col, glow };
+    const T = wd.bigTarget, u = clamp01((now - tFinale) / 1.6), e = inOut(u);
+    const x = bez(wd.x, wd.x, T.x, T.x, e), y = bez(wd.y, wd.y + 120, T.y - 160, T.y, e);
+    return { ...base, x, y, size: lerp(letterPx, T.size, e), weight: e > 0.5 ? 700 : 400, col: mix(CONFIG.red, [255, 70, 88], e), glow: 7 + 9 * e, inHeart: u >= 1 };
+  }
+  if (wd.tLeave === undefined || now < wd.tLeave) return { ...base, x: wd.x, y: wd.y, col, glow };
+
+  const rv = rivers[wd.side], tl = now - wd.tLeave, T = wd.liftT;
+  if (tl < T) {                                          // c) drift out of the letter and ease into the river
+    const en = riverAt(rv, wd.entryArc), u = tl / T;
+    const reach = (wd.v * T) / 3;                        // arrive moving like the river
+    const p1x = wd.x, p1y = wd.y + 6, p2x = en.x - Math.cos(en.ang) * reach, p2y = en.y - Math.sin(en.ang) * reach;
+    return { ...base, x: bez(wd.x, p1x, p2x, en.x, u), y: bez(wd.y, p1y, p2y, en.y, u),
+      ang: en.ang * smooth(clamp01((u - 0.15) / 0.85)), size: letterPx * lerp(1, 0.9, smooth(u)), col, glow };
+  }
+  const d = wd.entryArc + wd.v * (tl - T);
+  if (d < wd.exitArc) {                                  // d) ride the river, with a little wobble
+    const p = riverAt(rv, d), wob = Math.sin(now * 2.3 + i * 1.7) * 3.5 * smooth(clamp01((tl - T) / 0.8));
+    return { ...base, x: p.x - Math.sin(p.ang) * wob, y: p.y + Math.cos(p.ang) * wob, ang: p.ang + Math.sin(now * 1.6 + i) * 0.1 * smooth(clamp01((tl - T) / 0.8)), size: letterPx * 0.9, col, glow };
+  }
+  const ex = riverAt(rv, wd.exitArc), tg = (d - wd.exitArc) / wd.v, sl = wd.slot;
+  if (tg < 0.9) {                                        // e) settle into the heart, become "I love you"
+    const e = inOut(tg / 0.9), seed = i * 977 + Math.floor(now * 18);
+    const text = e < 0.5 ? scramble(wd.text, Math.min(1, e * 2.4), seed) : scramble(sl.text, Math.min(1, (1 - e) * 2.4), seed);
+    return { ...base, x: lerp(ex.x, sl.x, e), y: lerp(ex.y, sl.y, e), ang: lerp(ex.ang, 0, e), size: lerp(letterPx * 0.9, sl.size, e),
+      weight: e > 0.5 ? 700 : 400, text, col: mix(CONFIG.red, wd.heartCol, e), glow: glow * (1 - e), inHeart: true };
+  }
+  return { ...base, x: sl.x, y: sl.y, size: sl.size, weight: 700, text: sl.text, col: wd.heartCol, inHeart: true };
+}
+
+// =====================================================================
+// 7. Drawing
+// =====================================================================
+let stars = [], burst = [];
+function makeStars() {
+  stars = Array.from({ length: 110 }, () => ({ x: rand(0, W), y: rand(-H * 2.5, H * 1.2), c: '·+*.'[Math.floor(Math.random() * 4)], ph: rand(0, 6.28), sp: rand(0.6, 1.8) }));
+}
+function drawStars() {
+  ctx.fillStyle = '#9aa3c7'; ctx.font = `${envAscii.fontPx}px ${MONO}`; ctx.textAlign = 'center';
+  for (const s of stars) {
+    const y = s.y + state.cam * 0.35;
+    if (y < -10 || y > H + 10) continue;
+    ctx.globalAlpha = 0.08 + 0.3 * (0.5 + 0.5 * Math.sin(now * s.sp + s.ph));
+    ctx.fillText(s.c, s.x, y);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawBurst() {
+  burst = burst.filter(p => now - p.t0 < p.life);
+  ctx.font = `700 ${envAscii.fontPx * 1.3}px ${MONO}`; ctx.textAlign = 'center';
+  for (const p of burst) {
+    const u = (now - p.t0) / p.life;
+    ctx.globalAlpha = 1 - u; ctx.fillStyle = '#ff6f9a';
+    ctx.fillText(p.c, p.x + p.vx * u, p.y + p.vy * u + 60 * u * u);
+  }
+  ctx.globalAlpha = 1;
+}
+function beat() {
+  if (now < tFinale + 1.7) return 1;
+  const amp = clamp01((now - tFinale - 1.7) / 0.6), u = now % 1.15;
+  return 1 + amp * (0.045 * Math.exp(-(((u - 0.05) / 0.07) ** 2)) + 0.03 * Math.exp(-(((u - 0.32) / 0.08) ** 2)));
+}
+function drawWord(s) {
+  if (s.alpha <= 0.01) return;
+  let { x, y, size } = s;
+  if (s.inHeart) { const b = beat(); x = hc.x + (x - hc.x) * b; y = hc.y + (y - hc.y) * b; size *= b; }
+  ctx.globalAlpha = s.alpha;
+  ctx.font = `${s.weight} ${size}px ${MONO}`;
+  ctx.fillStyle = `rgb(${s.col[0] | 0},${s.col[1] | 0},${s.col[2] | 0})`;
+  if (s.glow > 0.2) { ctx.shadowColor = 'rgba(255,45,63,0.7)'; ctx.shadowBlur = s.glow; }
+  if (s.ang) { ctx.save(); ctx.translate(x, y + state.cam); ctx.rotate(s.ang); ctx.fillText(s.text, 0, 0); ctx.restore(); }
+  else ctx.fillText(s.text, x, y + state.cam);
+  ctx.shadowBlur = 0;
+}
+function drawWords() {
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  const states = words.map((wd, i) => wordState(wd, i));
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, 0, W, env.cy - env.h / 2 + state.cam + state.drop); ctx.clip();
+  states.forEach(s => { if (s && s.clip) drawWord(s); });
+  ctx.restore();
+  states.forEach(s => { if (s && !s.clip) drawWord(s); });
+  if (now > tScroll) {
+    for (const sp of spares) {
+      const u = clamp01((now - tScroll - 0.8 - sp.delay * 2.2) / 0.55);
+      if (u <= 0) continue;
+      const e = outCubic(u);
+      drawWord({ x: sp.x, y: sp.y, size: sp.size * lerp(1.7, 1, e), weight: 700, text: sp.text, col: mix([255, 255, 255], sp.col, e), alpha: e, glow: 0, ang: 0, inHeart: true });
+    }
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------- the cake: its image, live flames, shimmer, smoke ----------
+const cakeFront = () => {                                // the cake builds from the bottom up as the heart rains into it
+  const bottom = cake.y + cake.h * 0.93, top = cake.y + cake.h * 0.08;
+  return lerp(bottom, top, inOut(clamp01((now - tCake - 0.5) / 2.6)));
+};
+const flameAmount = () => {
+  if (now < tLit) return 0;
+  const lit = smooth(clamp01((now - tLit) / 0.8));
+  return now < tBlow ? lit : lit * (1 - smooth(clamp01((now - tBlow) / 0.45)));
+};
+
+function paintCake(g) {
+  const cam = state.cam, A = cakeAscii;
+  // Place the cake on whole character cells, so it slides row by row instead of shimmering.
+  const gx = Math.round(cake.x / A.cw), gy = Math.round((cake.y + cam) / A.ch);
+  const dx = gx * A.cw - cake.x, dy = gy * A.ch - (cake.y + cam);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(cake.cells, gx * A.cw, gy * A.ch, cake.gc * A.cw, cake.gr * A.ch);
+  // A slow band of light sweeps across the cake every few seconds.
+  const cyc = ((now - tCake) % 5.5) / 5.5;
+  if (now > tCake + 3 && cyc < 0.45) {
+    const bx = lerp(cake.x - cake.w * 0.4, cake.x + cake.w * 1.4, cyc / 0.45);
+    g.save(); g.globalCompositeOperation = 'source-atop';
+    const gr = g.createLinearGradient(bx - cake.w * 0.12, 0, bx + cake.w * 0.12, 0);
+    gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(cake.x - cake.w, cake.y + cam, cake.w * 3, cake.h);
+    g.restore();
+  }
+  // Wicks.
+  g.strokeStyle = '#6b6b70'; g.lineWidth = Math.max(1.5, cake.w * 0.008);
+  for (const c of cake.candles) { g.beginPath(); g.moveTo(c.x + dx, c.top + cam + dy); g.lineTo(c.x + dx, c.wickTop + cam + dy); g.stroke(); }
+  // Flames: redrawn every frame so they flicker and sway, then shrink away when blown out.
+  const amt = flameAmount();
+  if (amt > 0.01) {
+    cake.candles.forEach((c, i) => {
+      const n = Math.sin(now * 9.1 + i * 2.1) * 0.6 + Math.sin(now * 23.7 + i * 5.3) * 0.4;
+      const lean = now > tBlow ? smooth(clamp01((now - tBlow) / 0.45)) * cake.w * 0.03 : 0;
+      const fh = cake.h * 0.125 * amt * (1 + 0.08 * n), fw = cake.w * 0.074 * (0.7 + 0.3 * amt);
+      const bx = c.x + dx, by = c.wickTop + cam + dy + cake.h * 0.006;
+      const tx = bx + Math.sin(now * 3.1 + i) * cake.w * 0.008 + lean, ty = by - fh;
+      // soft glow around the flame (becomes a halo of faint characters)
+      const glow = g.createRadialGradient(bx, by - fh * 0.45, 0, bx, by - fh * 0.45, cake.w * 0.13);
+      glow.addColorStop(0, `rgba(255,170,60,${0.13 * amt})`); glow.addColorStop(1, 'rgba(255,120,40,0)');
+      g.fillStyle = glow; g.fillRect(bx - cake.w * 0.13, by - fh * 0.45 - cake.w * 0.13, cake.w * 0.26, cake.w * 0.26);
+      const drop = (scale, fill) => {
+        const h = fh * scale, w = fw * scale, y2 = by - (fh - h) * 0.15;
+        const tipx = lerp(bx, tx, scale), tipy = y2 - h;
+        g.fillStyle = fill; g.beginPath(); g.moveTo(tipx, tipy);
+        g.bezierCurveTo(tipx + w * 0.2, tipy + h * 0.35, bx + w * 0.55, y2 - w * 0.6, bx, y2);
+        g.bezierCurveTo(bx - w * 0.55, y2 - w * 0.6, tipx - w * 0.2, tipy + h * 0.35, tipx, tipy);
+        g.fill();
+      };
+      const outer = g.createRadialGradient(bx, by - fh * 0.3, 0, bx, by - fh * 0.3, fh * 0.9);
+      outer.addColorStop(0, '#ffd23f'); outer.addColorStop(0.5, '#ff8a1c'); outer.addColorStop(1, '#ff3d1a');
+      drop(1, outer);
+      drop(0.55, '#fff2a8');                              // bright core
+    });
+  }
+  // Smoke: soft grey puffs that the renderer turns into wispy characters.
+  for (const p of puffs) {
+    const age = now - p.born;
+    if (age < 0 || age > p.life) continue;
+    let x = p.x0 + Math.sin(age * 2.6 + p.ph) * (3 + 11 * age) + p.drift * age;   // curls wider as it rises
+    let y = p.y0 - p.rise * (age + 0.25 * age * age) + cam;
+    let r = 4 + 12 * age, a = 0.45 * Math.pow(1 - age / p.life, 1.2) * Math.min(1, age * 6);
+    const gather = smooth(clamp01((now - tBlow - 3.0) / 2.2));                     // drifts together where the orb forms
+    if (gather > 0) {
+      x = lerp(x, orb.cx + Math.sin(p.ph) * orb.R * 0.5, gather);
+      y = lerp(y, orb.cy + cam + Math.cos(p.ph * 1.3) * orb.R * 0.5, gather);
+      r *= 1 - 0.4 * gather;
+      a = Math.max(a, 0.18 * gather) * (1 - smooth(clamp01((now - tBlow - 5.0) / 1.2)));
+    }
+    const gr = g.createRadialGradient(x, y, 0, x, y, r);
+    gr.addColorStop(0, `rgba(240,243,248,${a})`); gr.addColorStop(1, 'rgba(240,243,248,0)');
+    g.fillStyle = gr; g.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+}
+
+function emitSmoke() {
+  if (now < tBlow + 0.15) return;
+  const age = now - tBlow, rate = age < 2.6 ? 24 : age < 4.5 ? 24 * (1 - (age - 2.6) / 1.9) : 0;  // puffs per second per wick
+  if (rate <= 0) { lastPuff = now; return; }
+  while (lastPuff < now) {
+    lastPuff += 1 / rate;
+    cake.candles.forEach((c, i) => {   // consecutive puffs share a phase, so each candle trails one wavy strand
+      puffs.push({ x0: c.x + rand(-1.5, 1.5), y0: c.wickTop, born: lastPuff, life: rand(3, 3.8), rise: rand(140, 175), ph: lastPuff * 3.1 + i * 2.1, drift: (i - 1) * 6 + rand(-3, 3) });
+    });
+  }
+  puffs = puffs.filter(p => now - p.born < p.life);
+}
+
+function drawCakeExtras() {
+  // Real light around the flames, on top of the characters.
+  const amt = flameAmount();
+  if (amt > 0.01) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (const c of cake.candles) {
+      const y = c.wickTop + state.cam - cake.h * 0.05, r = cake.w * 0.16 * (0.92 + 0.08 * Math.sin(now * 11 + c.x));
+      const gr = ctx.createRadialGradient(c.x, y, 0, c.x, y, r);
+      gr.addColorStop(0, `rgba(255,150,60,${0.22 * amt})`); gr.addColorStop(1, 'rgba(255,120,40,0)');
+      ctx.fillStyle = gr; ctx.fillRect(c.x - r, y - r, r * 2, r * 2);
+    }
+    ctx.restore();
+  }
+  // "Happy Birthday Britt" types itself above the cake.
+  if (now > tCake + 3.6) {
+    const n = Math.min(CONFIG.header.length, Math.floor((now - tCake - 3.6) / 0.075));
+    const size = Math.min(cake.w * 0.068, 30), w = textWidth(CONFIG.header, size);
+    // Gone once the candles are out. The fade goes into the colors themselves, because Safari
+    // ignores globalAlpha on text that has a glow.
+    const fade = 1 - smooth(clamp01((now - tBlow - 0.6) / 1.4));
+    if (fade > 0.01) glowText(CONFIG.header.slice(0, n), hc.x - w / 2, cake.y - cake.h * 0.005 + state.cam, size, fade, 'left');
+  }
+  // If she hasn't tapped 5 seconds after the candles light, a reminder slowly types itself.
+  if (phase === 'cake' && now > tLit + 5) {
+    const msg = 'tap to blow out the candles', n = Math.min(msg.length, Math.floor((now - tLit - 5) / 0.09));
+    const size = Math.min(cake.w * 0.042, 15), w = textWidth(msg, size, 400);
+    ctx.font = `400 ${size}px ${MONO}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillStyle = '#a3a8bb';
+    ctx.fillText(msg.slice(0, n), hc.x - w / 2, cake.y + cake.h * 0.99 + size + state.cam);
+    ctx.textAlign = 'center';
+  }
+}
+
+// White text with a pink glow. Its fade lives in the colors, which works in every browser.
+function glowText(text, x, y, size, alpha, align = 'center') {
+  ctx.globalAlpha = 1;
+  ctx.font = `700 ${size}px ${MONO}`; ctx.textAlign = align; ctx.textBaseline = 'middle';
+  ctx.fillStyle = `rgba(246,241,243,${alpha})`;
+  ctx.shadowColor = `rgba(255,79,134,${0.6 * alpha})`; ctx.shadowBlur = 10;
+  ctx.fillText(text, x, y);
+  ctx.shadowBlur = 0; ctx.textAlign = 'center';
+}
+
+// The last screen's words: "Here is your gift" above the orb, "Happy Birthday Baby" above the button.
+// Both type themselves out, left to right, once the orb has finished forming.
+function drawFinalText() {
+  if (now < tOrb + 3.6) return;
+  const typed = (text, start) => text.slice(0, Math.max(0, Math.min(text.length, Math.floor((now - start) / 0.08))));
+  const g = typed(CONFIG.giftLine, tOrb + 3.6), f = typed(CONFIG.finalLine, tOrb + 5.4);
+  if (g) glowText(g, W / 2 - textWidth(CONFIG.giftLine, ui.giftSize) / 2, ui.giftY, ui.giftSize, 1, 'left');
+  if (f) glowText(f, W / 2 - textWidth(CONFIG.finalLine, ui.finalSize) / 2, ui.finalY, ui.finalSize, 1, 'left');
+}
+
+function drawRemnants() {                    // the heart breaking into falling characters
+  const k = now - tCake;
+  if (k < 0.45) {
+    for (const r of remnants) {
+      drawWord({ x: r.x, y: r.y, size: r.size, weight: 700, text: scramble(r.text, k / 0.45, Math.floor(now * 18) + r.x), col: r.col, alpha: 1, glow: 0, ang: 0, inHeart: true });
+    }
+    return;
+  }
+  const front = cakeFront();
+  ctx.font = `700 ${cakeAscii.fontPx * 1.6}px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const c of crumbs) {
+    if (c.gone) continue;
+    const t = k - c.delay;
+    const x = t > 0 ? c.x + c.vx * t : c.x, y = t > 0 ? c.y + c.vy * t + 170 * t * t : c.y;   // a gentle rain, not a drop
+    if (y >= front || y > cake.y + cake.h) { c.gone = t > 0; if (c.gone) continue; }
+    const col = mix(c.col, [245, 245, 248], clamp01(t / 0.9));
+    ctx.globalAlpha = 1; ctx.fillStyle = `rgb(${col[0] | 0},${col[1] | 0},${col[2] | 0})`;
+    ctx.fillText(c.c, x, y + state.cam);
+  }
+  ctx.globalAlpha = 1;
+}
+
+function frame(ms) {
+  now = ms / 1000;
+  update();
+  emitSmoke();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1; ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  applyView();
+  drawStars();
+  if (state.drop < H * 1.2) envAscii.render(paintEnvelope, { reveal: phase === 'intro' ? smooth(clamp01((now - t0) / 1.4)) : 1, override: labelOverride });
+  if (now > tCake + 0.4) cakeAscii.render(paintScene, now < tCake + 3.2 ? { front: { y: cakeFront() + state.cam, band: cakeAscii.ch * 3 } } : {});
+  applyView();
+  drawBurst();
+  if (now < tCake) drawWords();
+  else { drawRemnants(); drawCakeExtras(); drawOrbExtras(); drawFinalText(); }
+  requestAnimationFrame(frame);
+}
+
+// =====================================================================
+// 8. Input and start
+// =====================================================================
+function onTap() { if (phase === 'closed') open(); else if (phase === 'cake') blow(); }
+window.addEventListener('pointerdown', onTap);
+window.addEventListener('keydown', e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); onTap(); } });
+// "Read your letter again": opens the letter over the spinning orb; she scrolls it herself.
+function fillLetterView() {
+  letterInner.textContent = '';
+  CONFIG.letter.split('\n').filter(Boolean).forEach(t => { const p = document.createElement('p'); p.textContent = t; letterInner.appendChild(p); });
+  const sig = document.createElement('p'); sig.className = 'sig'; sig.textContent = CONFIG.signature; letterInner.appendChild(sig);
+}
+fillLetterView();
+rereadBtn.addEventListener('pointerdown', e => e.stopPropagation());
+rereadBtn.addEventListener('click', e => { e.stopPropagation(); letterView.scrollTop = 0; letterView.classList.add('show'); rereadBtn.classList.remove('show'); });
+letterView.addEventListener('pointerdown', e => e.stopPropagation());
+letterView.addEventListener('click', () => { letterView.classList.remove('show'); rereadBtn.classList.add('show'); });
+function positionUI() {
+  hint.style.top = `${view.oy + (env.cy + env.h / 2 + 22) * view.k}px`;
+  rereadBtn.style.top = `${view.oy + ui.buttonTop * view.k}px`;
+}
+// If the screen changes size (the app's panel opening, the address bar sliding), lay the show out
+// again if it hasn't started yet; otherwise scale it to fit so nothing ever stretches.
+let resizeTimer = 0;
+window.addEventListener('resize', () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(onResize, 120); });
+function onResize() {
+  if (phase === 'intro' || phase === 'closed') { restart(); return; }
+  const sw = window.innerWidth, sh = window.innerHeight;
+  canvas.width = Math.round(sw * DPR); canvas.height = Math.round(sh * DPR);
+  const k = Math.min(sw / W, sh / H);
+  view = { k, ox: (sw - W * k) / 2, oy: (sh - H * k) / 2 };
+  positionUI();
+}
+// If the font finishes loading after the first layout, measure again before the show starts.
+if (document.fonts && document.fonts.addEventListener) {
+  document.fonts.addEventListener('loadingdone', () => {
+    if (phase === 'intro' || phase === 'closed') { widthCache.clear(); fitCache.clear(); restart(); }   // remeasure
+  });
+}
+
+async function boot() {
+  cake.img = new Image();
+  cake.img.src = CAKE_SRC;
+  try { await cake.img.decode(); } catch (e) { /* drawImage still works once loaded */ }
+  try {
+    await Promise.race([
+      Promise.all([document.fonts.load(`700 12px ${MONO}`), document.fonts.load(`400 12px ${MONO}`)]).then(() => document.fonts.ready),
+      new Promise(r => setTimeout(r, 4000)),
+    ]);
+  } catch (e) { /* system monospace is fine */ }
+  widthCache.clear(); fitCache.clear();
+  now = performance.now() / 1000;
+  restart();
+  if (location.hash === '#cake') skipToHeart();   // add #cake to the link to jump to the finished heart
+  if (location.hash === '#orb') skipToOrb();      // add #orb to jump to the candles being blown out
+  requestAnimationFrame(frame);
+}
+
+// Testing shortcut: start at the finished heart, just before it becomes the cake.
+function skipToHeart() {
+  hint.classList.remove('show');
+  phase = 'finale'; tTap = 0; tFlow = now - 100; tDrop = now - 50;
+  words.forEach(wd => { wd.tRed = now - 60; wd.tLeave = now - 50; });
+  tScroll = now - 20; tFinale = now - 2; tCake = now + 2;
+}
+// Testing shortcut: start just after the candles are blown out.
+function skipToOrb() {
+  skipToHeart();
+  phase = 'blow'; tCake = now - 12; tLit = now - 8; tBlow = now - 3.4; lastPuff = tBlow;
+  remnants = []; crumbs = [];
+}
+boot();
+</script>
+</body>
+</html>
